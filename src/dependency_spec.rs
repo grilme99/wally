@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -6,12 +7,29 @@ use crate::package_req::PackageReq;
 
 /// Specifies how a dependency should be resolved.
 ///
-/// Currently only registry dependencies are supported. Future variants (e.g.
-/// path dependencies for workspace support) will be added here.
+/// Variant ordering matters: `#[serde(untagged)]` tries each variant in
+/// declaration order. `Registry` (a plain string) must come first so that
+/// `"scope/name@version"` is not accidentally consumed by a table variant.
+/// `Path` (table with `path` key) comes next, then `Workspace` (table with
+/// `workspace` key).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
+    /// A registry dependency: `"scope/name@version"`.
     Registry(PackageReq),
+    /// A local path dependency: `{ path = "../sibling" }`.
+    Path(PathDependencySpec),
+    /// A workspace-inherited dependency: `{ workspace = true }`.
+    /// Resolved during workspace loading by replacing with the concrete spec
+    /// from `[workspace.dependencies]`. By the time the resolver runs, no
+    /// `Workspace` variants remain.
+    Workspace { workspace: bool },
+}
+
+/// Points to a local directory containing a `wally.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathDependencySpec {
+    pub path: PathBuf,
 }
 
 impl DependencySpec {
@@ -19,16 +37,30 @@ impl DependencySpec {
     pub fn as_registry(&self) -> Option<&PackageReq> {
         match self {
             DependencySpec::Registry(req) => Some(req),
+            _ => None,
         }
     }
 
     /// Unwraps the inner `PackageReq`, panicking if this is not a registry
-    /// dependency. Intended for use during the transition period where only
-    /// registry deps exist.
+    /// dependency.
     pub fn expect_registry(&self) -> &PackageReq {
         match self {
             DependencySpec::Registry(req) => req,
+            other => panic!("expected Registry dependency, got {:?}", other),
         }
+    }
+
+    /// Returns the inner `PathDependencySpec` if this is a path dependency.
+    pub fn as_path(&self) -> Option<&PathDependencySpec> {
+        match self {
+            DependencySpec::Path(spec) => Some(spec),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this is a `{ workspace = true }` directive.
+    pub fn is_workspace(&self) -> bool {
+        matches!(self, DependencySpec::Workspace { workspace: true })
     }
 }
 
@@ -36,6 +68,10 @@ impl fmt::Display for DependencySpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DependencySpec::Registry(req) => write!(f, "{}", req),
+            DependencySpec::Path(spec) => write!(f, "path: {}", spec.path.display()),
+            DependencySpec::Workspace { workspace } => {
+                write!(f, "workspace: {}", workspace)
+            }
         }
     }
 }
@@ -49,6 +85,10 @@ impl From<PackageReq> for DependencySpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Registry (existing behaviour preserved)
+    // -----------------------------------------------------------------------
 
     #[test]
     fn serde_round_trip_json() {
@@ -82,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn display() {
+    fn display_registry() {
         let req: PackageReq = "hello/world@1.0.0".parse().unwrap();
         let spec = DependencySpec::Registry(req.clone());
         assert_eq!(spec.to_string(), req.to_string());
@@ -135,5 +175,145 @@ mod tests {
             manifest.server_dependencies.len(),
             reparsed.server_dependencies.len()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Path dependency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_path_dep_toml() {
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            dep: DependencySpec,
+        }
+
+        let h: Helper = toml::from_str(r#"dep = { path = "../foo" }"#).unwrap();
+        let path_spec = h.dep.as_path().expect("expected Path variant");
+        assert_eq!(path_spec.path, PathBuf::from("../foo"));
+    }
+
+    #[test]
+    fn serde_round_trip_path_json() {
+        let spec = DependencySpec::Path(PathDependencySpec {
+            path: PathBuf::from("../sibling"),
+        });
+        let json = serde_json::to_string(&spec).unwrap();
+        let deserialized: DependencySpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(spec, deserialized);
+    }
+
+    #[test]
+    fn serde_round_trip_path_toml() {
+        let spec = DependencySpec::Path(PathDependencySpec {
+            path: PathBuf::from("../lib"),
+        });
+        let toml_val = toml::Value::try_from(&spec).unwrap();
+        let deserialized: DependencySpec = toml_val.try_into().unwrap();
+        assert_eq!(spec, deserialized);
+    }
+
+    #[test]
+    fn display_path() {
+        let spec = DependencySpec::Path(PathDependencySpec {
+            path: PathBuf::from("../foo"),
+        });
+        assert!(spec.to_string().contains("../foo"));
+    }
+
+    #[test]
+    fn as_path_returns_none_for_registry() {
+        let req: PackageReq = "hello/world@1.0.0".parse().unwrap();
+        let spec = DependencySpec::Registry(req);
+        assert!(spec.as_path().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace dependency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_workspace_dep_toml() {
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            dep: DependencySpec,
+        }
+
+        let h: Helper = toml::from_str(r#"dep = { workspace = true }"#).unwrap();
+        assert!(h.dep.is_workspace());
+    }
+
+    #[test]
+    fn parse_workspace_false_toml() {
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            dep: DependencySpec,
+        }
+
+        let h: Helper = toml::from_str(r#"dep = { workspace = false }"#).unwrap();
+        assert!(!h.dep.is_workspace());
+        assert!(matches!(
+            h.dep,
+            DependencySpec::Workspace { workspace: false }
+        ));
+    }
+
+    #[test]
+    fn serde_round_trip_workspace_json() {
+        let spec = DependencySpec::Workspace { workspace: true };
+        let json = serde_json::to_string(&spec).unwrap();
+        let deserialized: DependencySpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(spec, deserialized);
+    }
+
+    #[test]
+    fn display_workspace() {
+        let spec = DependencySpec::Workspace { workspace: true };
+        assert!(spec.to_string().contains("true"));
+    }
+
+    #[test]
+    fn is_workspace_false_for_non_workspace() {
+        let req: PackageReq = "hello/world@1.0.0".parse().unwrap();
+        assert!(!DependencySpec::Registry(req).is_workspace());
+        assert!(
+            !DependencySpec::Path(PathDependencySpec {
+                path: PathBuf::from("../foo")
+            })
+            .is_workspace()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Mixed dep table with all three variants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mixed_dep_table_toml() {
+        use std::collections::BTreeMap;
+
+        let toml_str = r#"
+            Roact = "roblox/roact@1.4.0"
+            Sibling = { path = "../sibling" }
+            Shared = { workspace = true }
+        "#;
+
+        let deps: BTreeMap<String, DependencySpec> = toml::from_str(toml_str).unwrap();
+        assert_eq!(deps.len(), 3);
+
+        assert!(deps.get("Roact").unwrap().as_registry().is_some());
+        assert!(deps.get("Sibling").unwrap().as_path().is_some());
+        assert!(deps.get("Shared").unwrap().is_workspace());
+    }
+
+    // -----------------------------------------------------------------------
+    // Existing string format still works (backward compat)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn existing_string_format_still_parses_as_registry() {
+        let toml_val = toml::Value::try_from("scope/name@1.0.0").unwrap();
+        let spec: DependencySpec = toml_val.try_into().unwrap();
+        assert!(spec.as_registry().is_some());
     }
 }

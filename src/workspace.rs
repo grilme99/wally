@@ -276,6 +276,9 @@ struct RawMemberPackage {
 /// Intermediate manifest representation for workspace members where dependency
 /// entries may use `{ workspace = true }` to inherit from
 /// `[workspace.dependencies]`.
+///
+/// Dependency maps use `DependencySpec` directly because
+/// `DependencySpec::Workspace` captures `{ workspace = true }` natively.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct RawMemberManifest {
@@ -283,11 +286,11 @@ struct RawMemberManifest {
     #[serde(default)]
     place: PlaceInfo,
     #[serde(default)]
-    dependencies: BTreeMap<String, WorkspaceInheritable<DependencySpec>>,
+    dependencies: BTreeMap<String, DependencySpec>,
     #[serde(default)]
-    server_dependencies: BTreeMap<String, WorkspaceInheritable<DependencySpec>>,
+    server_dependencies: BTreeMap<String, DependencySpec>,
     #[serde(default)]
-    dev_dependencies: BTreeMap<String, WorkspaceInheritable<DependencySpec>>,
+    dev_dependencies: BTreeMap<String, DependencySpec>,
 }
 
 /// Load a member's `wally.toml` and resolve workspace inheritance.
@@ -395,18 +398,17 @@ fn resolve_place(member: &PlaceInfo, workspace: &PlaceInfo) -> PlaceInfo {
     }
 }
 
-/// Resolve a dependency map, replacing `{ workspace = true }` entries with
-/// the corresponding entry from `[workspace.dependencies]`.
+/// Resolve a dependency map, replacing `DependencySpec::Workspace` entries
+/// with the corresponding entry from `[workspace.dependencies]`.
 fn resolve_dep_map(
-    deps: BTreeMap<String, WorkspaceInheritable<DependencySpec>>,
+    deps: BTreeMap<String, DependencySpec>,
     ws_deps: &BTreeMap<String, DependencySpec>,
 ) -> anyhow::Result<BTreeMap<String, DependencySpec>> {
     let mut resolved = BTreeMap::new();
 
     for (name, spec) in deps {
         let dep = match spec {
-            WorkspaceInheritable::Defined(d) => d,
-            WorkspaceInheritable::Workspace { workspace: true } => ws_deps
+            DependencySpec::Workspace { workspace: true } => ws_deps
                 .get(&name)
                 .cloned()
                 .ok_or_else(|| {
@@ -416,12 +418,13 @@ fn resolve_dep_map(
                         name
                     )
                 })?,
-            WorkspaceInheritable::Workspace { workspace: false } => {
+            DependencySpec::Workspace { workspace: false } => {
                 bail!(
                     "dependency '{}' has `workspace = false` which is not a valid directive",
                     name
                 );
             }
+            other => other,
         };
         resolved.insert(name, dep);
     }

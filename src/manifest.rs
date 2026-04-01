@@ -493,6 +493,11 @@ mod tests {
 
     #[test]
     fn workspace_inheritable_dependency_spec_workspace_directive() {
+        // Now that DependencySpec has a Workspace variant, `{ workspace = true }`
+        // is captured by DependencySpec::Workspace before WorkspaceInheritable
+        // gets a chance. The result is Defined(DependencySpec::Workspace { .. }).
+        // This is the correct behavior: workspace.rs uses DependencySpec directly
+        // for dependency maps rather than WorkspaceInheritable<DependencySpec>.
         let toml_str = r#"value = { workspace = true }"#;
 
         #[derive(Deserialize)]
@@ -501,6 +506,10 @@ mod tests {
         }
 
         let h: Helper = toml::from_str(toml_str).unwrap();
-        assert!(h.value.is_workspace_inherited());
+        if let WorkspaceInheritable::Defined(spec) = &h.value {
+            assert!(spec.is_workspace());
+        } else {
+            panic!("expected Defined(DependencySpec::Workspace), got {:?}", h.value);
+        }
     }
 }
