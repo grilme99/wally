@@ -207,6 +207,39 @@ impl Workspace {
     pub fn is_single_package(&self) -> bool {
         self.single_package
     }
+
+    /// Discover the workspace root starting from `start_dir`.
+    ///
+    /// Walks up from `start_dir` looking for a `wally.toml` with a
+    /// `[workspace]` section. If found, returns that directory. Otherwise,
+    /// returns `start_dir` itself (the nearest manifest is treated as a
+    /// single-package project).
+    pub fn discover_root(start_dir: &Path) -> anyhow::Result<PathBuf> {
+        let start = start_dir
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize: {}", start_dir.display()))?;
+
+        let mut current = start.as_path();
+        loop {
+            let manifest_path = current.join(MANIFEST_FILE_NAME);
+            if manifest_path.exists() {
+                if let Ok(content) = fs_err::read_to_string(&manifest_path) {
+                    if let Ok(project) = toml::from_str::<ProjectManifest>(&content) {
+                        if project.workspace.is_some() {
+                            return Ok(current.to_path_buf());
+                        }
+                    }
+                }
+            }
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+
+        // No workspace root found; use start_dir as a single-package project.
+        Ok(start)
+    }
 }
 
 /// Discover member directories by expanding glob patterns relative to the

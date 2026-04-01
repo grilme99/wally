@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::package_id;
 use crate::package_source::PackageSourceId;
+use crate::workspace::Workspace;
 use crate::{
     manifest::Manifest, package_id::PackageId, package_name::PackageName, resolution::Resolve,
 };
@@ -47,6 +48,13 @@ impl Lockfile {
     pub fn from_manifest(manifest: &Manifest) -> Self {
         Self {
             registry: manifest.package.registry.clone(),
+            packages: Vec::new(),
+        }
+    }
+
+    pub fn from_workspace(workspace: &Workspace) -> Self {
+        Self {
+            registry: workspace.registry().to_string(),
             packages: Vec::new(),
         }
     }

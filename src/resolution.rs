@@ -120,16 +120,27 @@ pub fn resolve_workspace(
     let mut resolve = Resolve::default();
     let mut packages_to_visit = VecDeque::new();
 
+    let is_single_package = workspace.is_single_package();
+
     for (member_dir, manifest) in workspace.members() {
         let member_id = manifest.package_id();
         resolve.activated.insert(member_id.clone());
+
+        // Single-package projects are treated identically to the legacy
+        // `resolve()` path: the root is not a workspace member.
+        let (source_registry, is_workspace_member) = if is_single_package {
+            (PackageSourceId::DefaultRegistry, false)
+        } else {
+            (PackageSourceId::Path(member_dir.clone()), true)
+        };
+
         resolve.metadata.insert(
             member_id.clone(),
             ResolvePackageMetadata {
                 realm: manifest.package.realm,
                 origin_realm: manifest.package.realm,
-                source_registry: PackageSourceId::Path(member_dir.clone()),
-                is_workspace_member: true,
+                source_registry,
+                is_workspace_member,
             },
         );
 
@@ -1333,11 +1344,12 @@ mod tests {
             let root_deps = &ws_resolved.shared_dependencies[&root_id];
             assert_eq!(root_deps.get("Dep"), Some(&dep_id));
 
-            // Root should have PackageSourceId::Path (it's a workspace member)
-            assert!(matches!(
+            // Single-package root uses DefaultRegistry (identical to legacy resolve())
+            assert_eq!(
                 ws_resolved.metadata[&root_id].source_registry,
-                PackageSourceId::Path(_)
-            ));
+                PackageSourceId::DefaultRegistry
+            );
+            assert!(!ws_resolved.metadata[&root_id].is_workspace_member);
             // Dep should come from the registry
             assert_eq!(
                 ws_resolved.metadata[&dep_id].source_registry,
