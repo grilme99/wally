@@ -122,7 +122,7 @@ impl InstallSubcommand {
             resolved.activated.len() - 1
         ));
 
-        let new_lockfile = Lockfile::from_resolve(&resolved);
+        let new_lockfile = Lockfile::from_resolve(&resolved, None);
         new_lockfile.save(&self.project_path)?;
 
         progress.println(format!(

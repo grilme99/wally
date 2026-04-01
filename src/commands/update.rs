@@ -107,7 +107,7 @@ impl UpdateSubcommand {
             render_update_difference(&dependency_changes, &mut std::io::stdout()).unwrap();
         });
 
-        Lockfile::from_resolve(&resolved_graph).save(&self.project_path)?;
+        Lockfile::from_resolve(&resolved_graph, None).save(&self.project_path)?;
 
         progress.println(format!(
             "{}    Updated {}lockfile",

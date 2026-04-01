@@ -59,6 +59,9 @@ pub struct ResolvePackageMetadata {
     pub realm: Realm,
     pub origin_realm: Realm,
     pub source_registry: PackageSourceId,
+    /// `true` when this package is a local workspace member (activated via
+    /// [`resolve_workspace`]) rather than a package fetched from a registry.
+    pub is_workspace_member: bool,
 }
 
 /// Resolve dependencies for a single-package project.
@@ -78,6 +81,7 @@ pub fn resolve(
             realm: root_manifest.package.realm,
             origin_realm: root_manifest.package.realm,
             source_registry: PackageSourceId::DefaultRegistry,
+            is_workspace_member: false,
         },
     );
 
@@ -125,6 +129,7 @@ pub fn resolve_workspace(
                 realm: manifest.package.realm,
                 origin_realm: manifest.package.realm,
                 source_registry: PackageSourceId::Path(member_dir.clone()),
+                is_workspace_member: true,
             },
         );
 
@@ -349,6 +354,7 @@ fn resolve_queued(
                     realm: candidate.package.realm,
                     origin_realm: dependency_request.origin_realm,
                     source_registry: source_registry.clone(),
+                    is_workspace_member: false,
                 },
             );
 
