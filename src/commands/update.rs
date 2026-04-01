@@ -115,7 +115,7 @@ impl UpdateSubcommand {
             SetForegroundColor(Color::Reset)
         ));
 
-        let root_package_id = manifest.package_id();
+        let root_package_ids = BTreeSet::from([manifest.package_id()]);
         let installation_context = InstallationContext::new(
             &self.project_path,
             manifest.place.shared_packages,
@@ -143,7 +143,7 @@ impl UpdateSubcommand {
             SetForegroundColor(Color::Reset)
         ));
 
-        installation_context.install(package_sources, root_package_id, resolved_graph)?;
+        installation_context.install(package_sources, root_package_ids, resolved_graph)?;
 
         Ok(())
     }
