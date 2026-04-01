@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod commands;
+pub mod dependency_spec;
 pub mod git_util;
 pub mod installation;
 pub mod lockfile;

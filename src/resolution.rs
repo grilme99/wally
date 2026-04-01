@@ -6,6 +6,7 @@ use anyhow::format_err;
 use semver::Version;
 use serde::Serialize;
 
+use crate::dependency_spec::DependencySpec;
 use crate::manifest::{Manifest, Realm};
 use crate::package_id::PackageId;
 use crate::package_req::PackageReq;
@@ -81,35 +82,11 @@ pub fn resolve(
     // Queue of all dependency requests that need to be resolved.
     let mut packages_to_visit = VecDeque::new();
 
-    for (alias, req) in &root_manifest.dependencies {
-        packages_to_visit.push_back(DependencyRequest {
-            request_source: root_manifest.package_id(),
-            request_realm: Realm::Shared,
-            origin_realm: Realm::Shared,
-            package_alias: alias.clone(),
-            package_req: req.clone(),
-        });
-    }
-
-    for (alias, req) in &root_manifest.server_dependencies {
-        packages_to_visit.push_back(DependencyRequest {
-            request_source: root_manifest.package_id(),
-            request_realm: Realm::Server,
-            origin_realm: Realm::Server,
-            package_alias: alias.clone(),
-            package_req: req.clone(),
-        });
-    }
-
-    for (alias, req) in &root_manifest.dev_dependencies {
-        packages_to_visit.push_back(DependencyRequest {
-            request_source: root_manifest.package_id(),
-            request_realm: Realm::Dev,
-            origin_realm: Realm::Dev,
-            package_alias: alias.clone(),
-            package_req: req.clone(),
-        });
-    }
+    enqueue_manifest_deps(
+        &root_manifest,
+        root_manifest.package_id(),
+        &mut packages_to_visit,
+    );
 
     // Workhorse loop: resolve all dependencies, depth-first.
     'outer: while let Some(dependency_request) = packages_to_visit.pop_front() {
@@ -248,25 +225,12 @@ pub fn resolve(
                 },
             );
 
-            for (alias, req) in &candidate.dependencies {
-                packages_to_visit.push_back(DependencyRequest {
-                    request_source: candidate_id.clone(),
-                    request_realm: Realm::Shared,
-                    origin_realm: dependency_request.origin_realm,
-                    package_alias: alias.clone(),
-                    package_req: req.clone(),
-                })
-            }
-
-            for (alias, req) in &candidate.server_dependencies {
-                packages_to_visit.push_back(DependencyRequest {
-                    request_source: candidate_id.clone(),
-                    request_realm: Realm::Server,
-                    origin_realm: dependency_request.origin_realm,
-                    package_alias: alias.clone(),
-                    package_req: req.clone(),
-                })
-            }
+            enqueue_transitive_deps(
+                &candidate,
+                candidate_id.clone(),
+                dependency_request.origin_realm,
+                &mut packages_to_visit,
+            );
 
             continue 'outer;
         }
@@ -296,6 +260,80 @@ pub fn resolve(
     }
 
     Ok(resolve)
+}
+
+fn extract_registry_req(alias: &str, spec: &DependencySpec) -> PackageReq {
+    match spec {
+        DependencySpec::Registry(req) => req.clone(),
+        #[allow(unreachable_patterns)]
+        _ => panic!(
+            "dependency '{}' is not a registry dependency: {:?}",
+            alias, spec
+        ),
+    }
+}
+
+fn enqueue_manifest_deps(
+    manifest: &Manifest,
+    source_id: PackageId,
+    queue: &mut VecDeque<DependencyRequest>,
+) {
+    for (alias, spec) in &manifest.dependencies {
+        queue.push_back(DependencyRequest {
+            request_source: source_id.clone(),
+            request_realm: Realm::Shared,
+            origin_realm: Realm::Shared,
+            package_alias: alias.clone(),
+            package_req: extract_registry_req(alias, spec),
+        });
+    }
+
+    for (alias, spec) in &manifest.server_dependencies {
+        queue.push_back(DependencyRequest {
+            request_source: source_id.clone(),
+            request_realm: Realm::Server,
+            origin_realm: Realm::Server,
+            package_alias: alias.clone(),
+            package_req: extract_registry_req(alias, spec),
+        });
+    }
+
+    for (alias, spec) in &manifest.dev_dependencies {
+        queue.push_back(DependencyRequest {
+            request_source: source_id.clone(),
+            request_realm: Realm::Dev,
+            origin_realm: Realm::Dev,
+            package_alias: alias.clone(),
+            package_req: extract_registry_req(alias, spec),
+        });
+    }
+}
+
+fn enqueue_transitive_deps(
+    manifest: &Manifest,
+    source_id: PackageId,
+    origin_realm: Realm,
+    queue: &mut VecDeque<DependencyRequest>,
+) {
+    for (alias, spec) in &manifest.dependencies {
+        queue.push_back(DependencyRequest {
+            request_source: source_id.clone(),
+            request_realm: Realm::Shared,
+            origin_realm,
+            package_alias: alias.clone(),
+            package_req: extract_registry_req(alias, spec),
+        });
+    }
+
+    for (alias, spec) in &manifest.server_dependencies {
+        queue.push_back(DependencyRequest {
+            request_source: source_id.clone(),
+            request_realm: Realm::Server,
+            origin_realm,
+            package_alias: alias.clone(),
+            package_req: extract_registry_req(alias, spec),
+        });
+    }
 }
 
 fn compatible(a: &Version, b: &Version) -> bool {
