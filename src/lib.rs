@@ -13,5 +13,6 @@ pub mod package_req;
 pub mod package_source;
 pub mod resolution;
 pub mod test_package;
+pub mod workspace;
 
 pub use commands::*;
