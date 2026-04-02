@@ -188,9 +188,8 @@ impl Realm {
 
 /// Either a concrete value or a directive to inherit from the workspace root.
 ///
-/// Mirrors Rotriever's `WorkspaceInheritable<T>`. When a member package
-/// specifies `{ workspace = true }` for a field, the value is resolved from
-/// the workspace root manifest at install time.
+/// When a member package specifies `{ workspace = true }` for a field, the
+/// value is resolved from the workspace root manifest at install time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WorkspaceInheritable<T> {
